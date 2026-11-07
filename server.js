@@ -235,6 +235,11 @@ async function route(req, res, url) {
     return json(res, 200, { session: id, filename: model.filename,
       scripts: model.scripts.map(s => ({ id: s.id, name: s.name, className: s.className, path: s.path, length: rbxl.sourceLength(model, s.id) })) });
   }
+  if (m === 'GET' && p === '/api/session') {
+    const model = getModel(url);
+    return json(res, 200, { session: url.searchParams.get('session'), filename: model.filename, edited: [...(model.edited || [])],
+      scripts: model.scripts.map(s => ({ id: s.id, name: s.name, className: s.className, path: s.path, length: rbxl.sourceLength(model, s.id) })) });
+  }
   if (m === 'GET' && p === '/api/script') {
     const model = getModel(url), id = +url.searchParams.get('id');
     if (!model.scripts[id]) throw fail('No such script', 404);
@@ -245,6 +250,7 @@ async function route(req, res, url) {
     if (!model.scripts[id]) throw fail('No such script', 404);
     const body = (await readBody(req)).toString('utf8');
     rbxl.setSource(model, id, body);
+    (model.edited ||= new Set()).add(id);
     return json(res, 200, { ok: true, length: body.length });
   }
   if (m === 'GET' && p === '/api/download') {
