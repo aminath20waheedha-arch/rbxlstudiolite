@@ -1,1 +1,132 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Place Script Editor</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--text:#16181d;--muted:#6b7280;--line:#dcdfe4;--field:#f3f4f6;--accent:#2563eb;--ok:#15803d;--err:#b91c1c}
+@media(prefers-color-scheme:dark){:root{--bg:#111318;--card:#1b1e25;--text:#eef0f3;--muted:#9aa1ad;--line:#333844;--field:#252932;--accent:#5b8def;--ok:#4ade80;--err:#f87171}}
+*{box-sizing:border-box}
+body{margin:0;padding:16px;background:var(--bg);color:var(--text);font-family:Roboto,system-ui,sans-serif;max-width:720px;margin-inline:auto}
+h1{font-size:28px;margin:8px 0 16px}h2{font-size:19px;margin:0 0 14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;margin-bottom:16px}
+.hint{color:var(--muted);font-size:14px;margin:10px 0 0}
+input[type=text],input[type=password],select,input[type=file]{width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--field);color:var(--text);font-size:16px;margin-bottom:12px}
+label{display:block;color:var(--muted);font-size:14px;margin-bottom:4px}
+.row{display:flex;gap:10px}.row>*{flex:1}
+button{padding:13px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--accent);font-weight:700;font-size:16px}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.script{border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;cursor:pointer}
+.script b{font-size:17px}.tag{background:var(--field);color:var(--muted);font-size:12px;padding:2px 8px;border-radius:8px;margin-left:6px}
+.script small{display:block;color:var(--muted);margin-top:4px;word-break:break-all}
+.edited{border-color:var(--accent)}
+textarea{width:100%;height:60vh;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.4;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--field);color:var(--text);white-space:pre;overflow:auto;tab-size:4}
+.ok{color:var(--ok)}.err{color:var(--err)}.chk{display:flex;gap:10px;align-items:flex-start;margin:6px 0 14px;color:var(--text);font-size:15px}
+.chk input{margin-top:4px;width:20px;height:20px}
+.hidden{display:none}
+</style></head><body>
+<h1>Place Script Editor</h1>
+
+<div class="card" id="c1">
+  <h2>1. Open your place</h2>
+  <input type="file" id="file" accept=".rbxl">
+  <div id="status"></div>
+  <p class="hint">Binary <b>.rbxl</b> files only. The file is kept in server memory for up to 1 hour while you edit, then discarded.</p>
+</div>
+
+<div class="card hidden" id="c2">
+  <h2>2. Pick a script</h2>
+  <div id="list">
+    <input type="text" id="q" placeholder="Search by name or path">
+    <label class="chk"><input type="checkbox" id="hide" checked> Hide backup copies (paths containing "Backup")</label>
+    <div id="items"></div>
+  </div>
+  <div id="editor" class="hidden">
+    <p id="etitle" style="margin-top:0"><b></b></p>
+    <textarea id="src" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+    <div class="row" style="margin-top:12px">
+      <button id="back">← Back</button>
+      <button class="primary" id="save">Save change</button>
+    </div>
+    <p class="hint" id="emsg"></p>
+  </div>
+</div>
+
+<div class="card hidden" id="c3">
+  <h2>3. Publish</h2>
+  <p id="changes">No changes yet.</p>
+  <label>Open Cloud API key</label><input type="password" id="key" autocomplete="off">
+  <label>Universe ID</label><input type="text" id="uni" inputmode="numeric">
+  <label>Place ID</label><input type="text" id="pid" inputmode="numeric">
+  <label>Action</label>
+  <select id="vt"><option value="Saved">Save only (not live)</option><option value="Published">Publish live</option></select>
+  <label class="chk"><input type="checkbox" id="ok"> I understand publishing overwrites the current version of this place.</label>
+  <div class="row"><button class="primary" id="up">Upload</button><button id="dl">Download file</button></div>
+  <div id="pmsg" class="hint"></div>
+  <p class="hint">Your key goes only to this site's server, which forwards it to Roblox and does not store it. The API key needs the Place Publishing (universe-places:write) permission.</p>
+</div>
+
+<script>
+let session=null,scripts=[],current=null;const edited=new Set();
+const $=id=>document.getElementById(id);
+function msg(el,t,c){el.textContent=t;el.className=c||'hint'}
+
+$('file').onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  $('status').innerHTML='<p>Reading place… this can take up to a minute for big places.</p>';
+  $('c2').classList.add('hidden');$('c3').classList.add('hidden');
+  try{
+    const r=await fetch('/api/upload',{method:'POST',headers:{'x-filename':encodeURIComponent(f.name),'Content-Type':'application/octet-stream'},body:f});
+    const d=await r.json();if(!r.ok)throw new Error(d.error);
+    session=d.session;scripts=d.scripts;edited.clear();
+    $('status').innerHTML='<p class="ok"></p>';$('status').firstChild.textContent='Found '+scripts.length+' scripts in '+d.filename;
+    $('c2').classList.remove('hidden');$('c3').classList.remove('hidden');
+    showList();updateChanges();
+  }catch(err){$('status').innerHTML='<p class="err"></p>';$('status').firstChild.textContent=err.message}
+};
+
+function showList(){
+  $('editor').classList.add('hidden');$('list').classList.remove('hidden');
+  const q=$('q').value.toLowerCase(),hide=$('hide').checked,box=$('items');box.innerHTML='';
+  let n=0;
+  for(const s of scripts){
+    if(hide&&s.path.includes('Backup'))continue;
+    if(q&&!(s.name+' '+s.path).toLowerCase().includes(q))continue;
+    if(++n>200)break;
+    const d=document.createElement('div');d.className='script'+(edited.has(s.id)?' edited':'');
+    const b=document.createElement('b');b.textContent=s.name;
+    const t=document.createElement('span');t.className='tag';t.textContent=s.className;
+    const sm=document.createElement('small');sm.textContent=s.path+' · '+s.length.toLocaleString()+' chars';
+    d.append(b,t,sm);d.onclick=()=>openScript(s);box.appendChild(d);
+  }
+  if(n>200){const p=document.createElement('p');p.className='hint';p.textContent='Showing first 200 — use search to narrow.';box.appendChild(p)}
+}
+$('q').oninput=showList;$('hide').onchange=showList;
+
+async function openScript(s){
+  current=s;$('list').classList.add('hidden');$('editor').classList.remove('hidden');
+  $('etitle').firstChild.textContent=s.path;$('src').value='Loading…';msg($('emsg'),'');
+  const r=await fetch('/api/script?session='+session+'&id='+s.id);const d=await r.json();
+  $('src').value=r.ok?d.source:'';if(!r.ok)msg($('emsg'),d.error,'hint err');
+}
+$('back').onclick=()=>{showList();scrollTo(0,0)};
+$('save').onclick=async()=>{
+  const r=await fetch('/api/script?session='+session+'&id='+current.id,{method:'POST',body:$('src').value});
+  const d=await r.json();
+  if(!r.ok)return msg($('emsg'),d.error,'hint err');
+  current.length=d.length;edited.add(current.id);updateChanges();msg($('emsg'),'Saved ✓ (applies when you upload or download)','hint ok');
+};
+function updateChanges(){$('changes').textContent=edited.size?edited.size+' script(s) changed.':'No changes yet.'}
+
+$('dl').onclick=()=>{if(session)location.href='/api/download?session='+session};
+$('up').onclick=async()=>{
+  if(!$('ok').checked)return msg($('pmsg'),'Tick the confirmation box first.','hint err');
+  msg($('pmsg'),'Uploading…');
+  try{
+    const r=await fetch('/api/publish?session='+session,{method:'POST',body:JSON.stringify({apiKey:$('key').value.trim(),universeId:$('uni').value.trim(),placeId:$('pid').value.trim(),versionType:$('vt').value})});
+    const d=await r.json();if(!r.ok)throw new Error(d.error);
+    msg($('pmsg'),'Done ✓ '+d.response,'hint ok');
+  }catch(e){msg($('pmsg'),e.message,'hint err')}
+};
+</script></body></html>
 
