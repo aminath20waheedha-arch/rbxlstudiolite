@@ -1,6 +1,7 @@
 // Minimal reader/editor for Roblox binary place files (.rbxl).
 // Only script Source properties are decoded/rewritten; every other chunk is copied byte-for-byte.
 const MAGIC = Buffer.from([0x3c,0x72,0x6f,0x62,0x6c,0x6f,0x78,0x21,0x89,0xff,0x0d,0x0a,0x1a,0x0a]); // "<roblox!" + signature
+const zlib = require('zlib');
 const SCRIPT_CLASSES = new Set(['Script', 'LocalScript', 'ModuleScript']);
 
 function lz4Decompress(src, outLen) {
@@ -10,6 +11,7 @@ function lz4Decompress(src, outLen) {
     const token = src[si++];
     let lit = token >> 4;
     if (lit === 15) { let b; do { b = src[si++]; lit += b; } while (b === 255); }
+    if (!(lit >= 0) || si + lit > src.length || di + lit > outLen) throw new Error('Corrupt or unsupported chunk compression.');
     src.copy(out, di, si, si + lit); si += lit; di += lit;
     if (si >= src.length) break;
     const offset = src[si] | (src[si + 1] << 8); si += 2;
@@ -19,6 +21,17 @@ function lz4Decompress(src, outLen) {
     for (let i = 0; i < ml; i++) { out[di] = out[di - offset]; di++; }
   }
   return out;
+}
+
+// Chunks are LZ4-compressed by older Studio versions and ZSTD-compressed by newer ones.
+function decompress(src, outLen) {
+  if (src.length >= 4 && src.readUInt32LE(0) === 0xfd2fb528) {
+    if (typeof zlib.zstdDecompressSync !== 'function') {
+      throw new Error('This place uses ZSTD compression, which needs Node 22.15 or newer on the server.');
+    }
+    return zlib.zstdDecompressSync(src);
+  }
+  return lz4Decompress(src, outLen);
 }
 
 function readRefs(buf, pos, n) {
@@ -56,7 +69,7 @@ function parse(buf) {
     if (name === 'END') break;
     if (name !== 'INST' && name !== 'PROP' && name !== 'PRNT') continue;
     const raw = buf.slice(start + 16, end);
-    const d = comp === 0 ? raw : lz4Decompress(raw, uncomp);
+    const d = comp === 0 ? raw : decompress(raw, uncomp);
     if (name === 'INST') {
       const classId = d.readUInt32LE(0);
       const nl = d.readUInt32LE(4);
@@ -127,7 +140,7 @@ function build(model) {
     const orig = model.buf.slice(chunk.start + 16, chunk.end);
     const comp = model.buf.readUInt32LE(chunk.start + 4);
     const uncomp = model.buf.readUInt32LE(chunk.start + 8);
-    const d = comp === 0 ? orig : lz4Decompress(orig, uncomp);
+    const d = comp === 0 ? orig : decompress(orig, uncomp);
     const pl = d.readUInt32LE(4);
     const head = d.slice(0, 9 + pl);
     const body = [];
@@ -147,4 +160,4 @@ function build(model) {
   return Buffer.concat(parts);
 }
 
-module.exports = { parse, getSource, setSource, sourceLength, build, lz4Decompress };
+module.exports = { parse, getSource, setSource, sourceLength, build, lz4Decompress, decompress };
