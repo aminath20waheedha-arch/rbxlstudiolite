@@ -216,7 +216,7 @@ async function route(req, res, url) {
       const verifier = crypto.randomBytes(32).toString('base64url');
       oauthStates.set(state, { userId: user.id, verifier, exp: Date.now() + 10 * 60 * 1000 });
       const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
-      const q = new URLSearchParams({ client_id: RBX_ID, redirect_uri: redirectUri(), scope: 'openid profile universe-places:write',
+      const q = new URLSearchParams({ client_id: RBX_ID, redirect_uri: redirectUri(), scope: process.env.ROBLOX_SCOPES || 'openid profile universe-places:write',
         response_type: 'code', state, code_challenge: challenge, code_challenge_method: 'S256' });
       res.writeHead(302, { Location: 'https://apis.roblox.com/oauth/v1/authorize?' + q }); return res.end();
     } catch (e) { res.writeHead(302, { Location: '/?linkerror=' + encodeURIComponent(e.message) }); return res.end(); }
