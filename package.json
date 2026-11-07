@@ -4,6 +4,6 @@
   "private": true,
   "main": "server.js",
   "scripts": { "start": "node server.js" },
-  "engines": { "node": ">=18" },
+  "engines": { "node": ">=22.15" },
   "dependencies": { "pg": "^8.11.3" }
 }
