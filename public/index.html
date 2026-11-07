@@ -38,10 +38,6 @@ textarea{width:100%;height:60vh;font-family:ui-monospace,Menlo,Consolas,monospac
   </div>
   <div id="loggedIn" class="hidden">
     <h2 id="who"></h2>
-    <div id="rbxBox" class="hidden">
-      <p id="rbxState" style="margin-top:0"></p>
-      <div class="row"><button class="primary" id="rbxConnect">Connect Roblox</button><button class="danger hidden" id="rbxUnlink">Disconnect</button></div>
-    </div>
     <div style="margin-top:12px"><button id="logout" style="width:100%">Log out</button></div>
   </div>
   <p id="amsg" class="hint"></p>
@@ -73,27 +69,35 @@ textarea{width:100%;height:60vh;font-family:ui-monospace,Menlo,Consolas,monospac
   <h2>3. Publish</h2>
   <p id="changes">No changes yet.</p>
 
-  <div id="modeBox" class="hidden"><label>Publish with</label><select id="mode"></select></div>
+  <label>Upload method</label>
+  <select id="method"><option value="api">API key</option><option value="oauth">Roblox login (OAuth)</option></select>
 
-  <div id="manual">
-    <label>Open Cloud API key</label><input type="password" id="key" autocomplete="off">
-    <label>Universe ID</label><input type="text" id="uni" inputmode="numeric">
-    <label>Place ID</label><input type="text" id="pid" inputmode="numeric">
-    <div id="saveBox" class="hidden">
-      <label class="chk"><input type="checkbox" id="saveIt"> Save these details to my account (key is encrypted)</label>
-      <input type="text" id="label" placeholder="Name for this game, e.g. My Obby" maxlength="40">
+  <div id="pApi">
+    <div id="savedBox" class="hidden"><label>Saved games</label><select id="saved"></select></div>
+    <div id="manual">
+      <label>Open Cloud API key</label><input type="password" id="key" autocomplete="off">
+      <label>Universe ID</label><input type="text" id="uni" inputmode="numeric">
+      <label>Place ID</label><input type="text" id="pid" inputmode="numeric">
+      <div id="saveBox" class="hidden">
+        <label class="chk"><input type="checkbox" id="saveIt"> Save these details to my account (key is encrypted)</label>
+        <input type="text" id="label" placeholder="Name for this game, e.g. My Obby" maxlength="40">
+      </div>
+    </div>
+    <div id="savedInfoBox" class="hidden">
+      <p id="savedInfo" style="margin-top:0"></p>
+      <button class="danger" id="delSaved" style="width:100%;margin-bottom:12px">Delete this saved game</button>
     </div>
   </div>
 
-  <div id="rgames" class="hidden">
-    <label>Your Roblox games</label><select id="games"></select>
-    <label>Place ID</label><input type="text" id="rpid" inputmode="numeric">
-    <p class="hint" id="gmsg" style="margin-top:0"></p>
-  </div>
-
-  <div id="saved" class="hidden">
-    <p id="savedInfo" style="margin-top:0"></p>
-    <button class="danger" id="delSaved" style="width:100%;margin-bottom:12px">Delete this saved game</button>
+  <div id="pOauth" class="hidden">
+    <p id="oMsg" style="margin-top:0"></p>
+    <div id="oConnect" class="hidden"><button class="primary" id="rbxConnect" style="width:100%;margin-bottom:12px">Connect Roblox</button></div>
+    <div id="oGames" class="hidden">
+      <label>Your Roblox games</label><select id="games"></select>
+      <label>Place ID</label><input type="text" id="rpid" inputmode="numeric">
+      <p class="hint" id="gmsg" style="margin-top:0;margin-bottom:12px"></p>
+      <div class="row" style="margin-bottom:12px"><button id="rbxChange">Change games</button><button class="danger" id="rbxUnlink">Disconnect</button></div>
+    </div>
   </div>
 
   <label>Action</label>
@@ -121,6 +125,9 @@ async function init(){
   $('acct').classList.remove('hidden');
   const p=new URLSearchParams(location.search);
   await refreshMe();
+  let sid='';try{sid=sessionStorage.getItem('rbxSession')||'';sessionStorage.removeItem('rbxSession')}catch{}
+  if(sid){try{loadPlace(await api('/api/session?session='+sid))}catch{}}
+  if(p.get('linked')||p.get('linkerror')){$('method').value='oauth';$('method').onchange()}
   if(p.get('linked'))msg($('amsg'),'Roblox connected ✓','hint ok');
   if(p.get('linkerror'))msg($('amsg'),p.get('linkerror'),'hint err');
   if(p.toString())history.replaceState(null,'','/');
@@ -130,12 +137,8 @@ async function refreshMe(){
   $('loggedOut').classList.toggle('hidden',!!me);$('loggedIn').classList.toggle('hidden',!me);
   if(me){
     $('who').textContent='Signed in as '+me.user.username;
-    $('rbxBox').classList.toggle('hidden',!cfg.roblox);
-    $('rbxState').textContent=me.roblox?'Roblox connected: '+me.roblox.name:'Connect Roblox to pick your games from a list — no API key needed.';
-    $('rbxConnect').textContent=me.roblox?'Reconnect / change games':'Connect Roblox';
-    $('rbxUnlink').classList.toggle('hidden',!me.roblox);
   }
-  buildModes();
+  buildSaved();renderOauth();
 }
 async function auth(kind){
   try{await api('/api/'+kind,{method:'POST',body:JSON.stringify({username:$('un').value,password:$('pw').value})});$('pw').value='';msg($('amsg'),'');await refreshMe()}
@@ -143,60 +146,72 @@ async function auth(kind){
 }
 $('login').onclick=()=>auth('login');$('signup').onclick=()=>auth('signup');
 $('logout').onclick=async()=>{await api('/api/logout',{method:'POST'});me=null;await refreshMe()};
-$('rbxConnect').onclick=()=>{location.href='/auth/roblox/start'};
-$('rbxUnlink').onclick=async()=>{await api('/api/roblox/unlink',{method:'POST'});await refreshMe()};
 
-/* ---------- publish modes ---------- */
-function buildModes(){
-  const sel=$('mode');sel.innerHTML='';
+/* ---------- publish method ---------- */
+function buildSaved(){
+  const sel=$('saved');sel.innerHTML='';
   const add=(v,t)=>{const o=document.createElement('option');o.value=v;o.textContent=t;sel.appendChild(o)};
-  add('manual','Enter API key manually');
-  if(me){
-    if(me.roblox)add('roblox','My Roblox games (connected)');
-    me.profiles.forEach(p=>add('p'+p.id,'Saved: '+p.label+' ('+p.placeId+')'));
-  }
-  $('modeBox').classList.toggle('hidden',!me);
-  $('saveBox').classList.toggle('hidden',!me);
-  sel.value=me&&me.roblox?'roblox':me&&me.profiles.length?'p'+me.profiles[0].id:'manual';
-  modeChanged();
+  const has=!!(me&&me.profiles.length);
+  add('new','Enter a new key');
+  if(has)me.profiles.forEach(p=>add('p'+p.id,p.label+' ('+p.placeId+')'));
+  $('savedBox').classList.toggle('hidden',!has);
+  sel.value=has?'p'+me.profiles[0].id:'new';
+  savedChanged();
 }
-async function modeChanged(){
-  const v=$('mode').value;
-  $('manual').classList.toggle('hidden',v!=='manual');
-  $('rgames').classList.toggle('hidden',v!=='roblox');
-  $('saved').classList.toggle('hidden',!v.startsWith('p'));
-  if(v.startsWith('p')){const p=me.profiles.find(x=>'p'+x.id===v);$('savedInfo').textContent=p.label+' — Universe '+p.universeId+', Place '+p.placeId}
-  if(v==='roblox')loadGames();
+function savedChanged(){
+  const v=$('saved').value,isNew=v==='new'||!me||!me.profiles.length;
+  $('manual').classList.toggle('hidden',!isNew);
+  $('savedInfoBox').classList.toggle('hidden',isNew);
+  $('saveBox').classList.toggle('hidden',!me||!isNew);
+  if(!isNew){const p=me.profiles.find(x=>'p'+x.id===v);if(p)$('savedInfo').textContent=p.label+' — Universe '+p.universeId+', Place '+p.placeId}
 }
-$('mode').onchange=modeChanged;
+$('saved').onchange=savedChanged;
+$('method').onchange=()=>{
+  const oauth=$('method').value==='oauth';
+  $('pApi').classList.toggle('hidden',oauth);$('pOauth').classList.toggle('hidden',!oauth);
+  if(oauth)renderOauth();
+};
+function renderOauth(){
+  const m=$('oMsg'),show=(c,g)=>{$('oConnect').classList.toggle('hidden',!c);$('oGames').classList.toggle('hidden',!g)};
+  if(!cfg.accounts){msg(m,'Accounts are not enabled on this server, so Roblox login is unavailable. Use the API key method.','err');return show(0,0)}
+  if(!cfg.roblox){msg(m,'Roblox login is not set up on this server yet (the site owner needs to add the Roblox OAuth settings). Use the API key method for now.','err');return show(0,0)}
+  if(!me){msg(m,'Log in or sign up at the top of the page first, then connect your Roblox account.','');return show(0,0)}
+  if(!me.roblox){msg(m,'Your Roblox account is not connected yet. Connect it so the site can read your games — no API key needed.','');return show(1,0)}
+  msg(m,'Roblox connected: '+me.roblox.name,'ok');show(0,1);
+  if($('method').value==='oauth')loadGames();
+}
 async function loadGames(){
   msg($('gmsg'),'Loading your games…');
   try{
     rGames=(await api('/api/roblox/games')).games;
     const s=$('games');s.innerHTML='';
     rGames.forEach((g,i)=>{const o=document.createElement('option');o.value=i;o.textContent=g.name;s.appendChild(o)});
-    if(!rGames.length)return msg($('gmsg'),'No games shared yet. Tap "Reconnect / change games" and tick the games you want to allow.','hint err');
+    if(!rGames.length){$('rpid').value='';return msg($('gmsg'),'No games shared yet. Tap "Change games" and tick the games you want to allow.','hint err')}
     s.onchange=()=>{$('rpid').value=rGames[s.value].placeId};s.onchange();
     msg($('gmsg'),rGames.length+' game(s). Private games may need their Place ID typed in.');
   }catch(e){msg($('gmsg'),e.message,'hint err')}
 }
+function goConnect(){try{sessionStorage.setItem('rbxSession',session||'')}catch{}location.href='/auth/roblox/start'}
+$('rbxConnect').onclick=goConnect;$('rbxChange').onclick=goConnect;
+$('rbxUnlink').onclick=async()=>{await api('/api/roblox/unlink',{method:'POST'});await refreshMe()};
 $('delSaved').onclick=async()=>{
-  const id=$('mode').value.slice(1);
   if(!confirm('Delete this saved game and its stored API key?'))return;
-  await api('/api/profiles?id='+id,{method:'DELETE'});await refreshMe();
+  await api('/api/profiles?id='+$('saved').value.slice(1),{method:'DELETE'});await refreshMe();
 };
 
 /* ---------- place editing ---------- */
+function loadPlace(d){
+  session=d.session;scripts=d.scripts;edited.clear();(d.edited||[]).forEach(i=>edited.add(i));
+  $('status').innerHTML='<p class="ok"></p>';$('status').firstChild.textContent='Found '+scripts.length+' scripts in '+d.filename;
+  $('c2').classList.remove('hidden');$('c3').classList.remove('hidden');
+  showList();updateChanges();
+}
 $('file').onchange=async e=>{
   const f=e.target.files[0];if(!f)return;
   $('status').innerHTML='<p>Reading place… this can take up to a minute for big places.</p>';
   $('c2').classList.add('hidden');$('c3').classList.add('hidden');
   try{
-    const d=await api('/api/upload',{method:'POST',headers:{'x-filename':encodeURIComponent(f.name),'Content-Type':'application/octet-stream'},body:f});
-    session=d.session;scripts=d.scripts;edited.clear();
-    $('status').innerHTML='<p class="ok"></p>';$('status').firstChild.textContent='Found '+scripts.length+' scripts in '+d.filename;
-    $('c2').classList.remove('hidden');$('c3').classList.remove('hidden');
-    showList();updateChanges();
+    loadPlace(await api('/api/upload',{method:'POST',headers:{'x-filename':encodeURIComponent(f.name),'Content-Type':'application/octet-stream'},body:f}));
   }catch(err){$('status').innerHTML='<p class="err"></p>';$('status').firstChild.textContent=err.message}
 };
 function showList(){
@@ -233,12 +248,18 @@ function updateChanges(){$('changes').textContent=edited.size?edited.size+' scri
 /* ---------- publish ---------- */
 $('dl').onclick=()=>{if(session)location.href='/api/download?session='+session};
 $('up').onclick=async()=>{
+  if(!session)return msg($('pmsg'),'Open a place file first.','hint err');
   if(!$('ok').checked)return msg($('pmsg'),'Tick the confirmation box first.','hint err');
-  const mode=$('mode').value||'manual';
   const body={versionType:$('vt').value};
-  if(mode==='manual'){Object.assign(body,{apiKey:$('key').value,universeId:$('uni').value,placeId:$('pid').value,save:$('saveIt').checked,label:$('label').value})}
-  else if(mode==='roblox'){const g=rGames[$('games').value];if(!g)return msg($('pmsg'),'Pick a game first.','hint err');Object.assign(body,{useRoblox:true,universeId:g.universeId,placeId:$('rpid').value})}
-  else body.profileId=mode.slice(1);
+  if($('method').value==='oauth'){
+    if(!me||!me.roblox)return msg($('pmsg'),'Connect your Roblox account first.','hint err');
+    const g=rGames[$('games').value];if(!g)return msg($('pmsg'),'Pick a game first.','hint err');
+    Object.assign(body,{useRoblox:true,universeId:g.universeId,placeId:$('rpid').value});
+  }else{
+    const v=$('saved').value;
+    if(me&&v.startsWith('p'))body.profileId=v.slice(1);
+    else Object.assign(body,{apiKey:$('key').value,universeId:$('uni').value,placeId:$('pid').value,save:$('saveIt').checked,label:$('label').value});
+  }
   msg($('pmsg'),'Uploading…');
   try{
     const d=await api('/api/publish?session='+session,{method:'POST',body:JSON.stringify(body)});
